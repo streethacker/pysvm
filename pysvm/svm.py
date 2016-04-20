@@ -65,6 +65,7 @@ CHARSET = [
 REDIS_DSN = "redis://localhost:6379/0"
 TOKEN_EXPIRATION = 60
 BG_COLOR = (255, 255, 255)
+MAX_TRY = 3
 
 
 class VerifyCodeManager(object):
@@ -75,8 +76,8 @@ class VerifyCodeManager(object):
     :param width: The width of the verify code picture, in pixels.
     :param height: The height of the verify code picture, in pixels.
     :param mode: The color mode to use for the new image, default 'RGB'.
-    :param bg_color: A 3-tuple, containing (R, G, B) three integers to describe
-        an RGB color.
+    :param bg_color: A 3-tuple, containing (R, G, B) three integers
+        to describe an RGB color.
     :param font_size: Font size to use for the verify code, default 22.
     :param font_face: Font face to user for the verify code, default
         'Arial.ttf'.
@@ -85,6 +86,7 @@ class VerifyCodeManager(object):
     :param redis_dsn: Redis DSN(data source name), e.g.
         redis://[:password]@localhost:6379/0.
     :param ttl: Redis storage expiration time, count on seconds.
+    :param max_try: Trails limit for verify code, default 3.
     """
 
     def __init__(
@@ -99,7 +101,8 @@ class VerifyCodeManager(object):
             text_length=4,
             noise_coverage=0.3,
             redis_dsn=REDIS_DSN,
-            ttl=TOKEN_EXPIRATION):
+            ttl=TOKEN_EXPIRATION,
+            max_try=MAX_TRY):
         self._r = Redis.from_url(redis_dsn)
         self._ttl = ttl
         self._charset = charset
@@ -111,6 +114,7 @@ class VerifyCodeManager(object):
         self._font_face = font_face
         self._text_length = text_length
         self._noise_coverage = noise_coverage
+        self._max_try = max_try
 
     def new(self, fmt='JPEG', quality=70):
         """
@@ -189,6 +193,10 @@ class VerifyCodeManager(object):
         :param verify_code: The verify code received from the browser.
         Raises :py:class:`~VerifyCodeError` exception if verify code wrong.
         """
+        try_count = self._r.hincrby(image_hash, 'try_count', 1)
+        if try_count > self._max_try:
+            self._r.expire(image_hash, 0)
+            raise VerifyCodeError(2013)
         ref_code = self._r.hget(image_hash, 'verify_code')
         if not ref_code or \
                 verify_code.upper() != ref_code.upper():
@@ -267,8 +275,8 @@ class VerifyCodeManager(object):
         Judge the result of the Redis pipeline.
 
         :param pipe_res: Response sequence of the Redis pipeline executed.
-        Returns True if each pipeline command executed successfully, else
-            False.
+        Returns True if each pipeline command executed successfully,
+            else False.
         """
         return reduce(lambda x, y: bool(x) & bool(y), pipe_res)
 
