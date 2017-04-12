@@ -1,20 +1,13 @@
 # -*- coding: utf-8 -*-
 
-__all__ = ['VerifyCodeManager', 'verifycode_manager']
+__all__ = ['VerifyCodeManager', 'default_manager']
 
 import random
 import hashlib
 import StringIO
 import logging
-
 from redis import Redis
-from PIL import (
-    Image,
-    ImageDraw,
-    ImageFont,
-    ImageFilter
-)
-
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from .exc import VerifyCodeError
 
 logger = logging.getLogger(__name__)
@@ -70,23 +63,26 @@ MAX_TRY = 3
 
 class VerifyCodeManager(object):
     """
-    Create an verify code picture.
+    Create verify code image.
 
-    :param charset: The characters to use for the verify code.
-    :param width: The width of the verify code picture, in pixels.
-    :param height: The height of the verify code picture, in pixels.
-    :param mode: The color mode to use for the new image, default 'RGB'.
-    :param bg_color: A 3-tuple, containing (R, G, B) three integers
-        to describe an RGB color.
-    :param font_size: Font size to use for the verify code, default 22.
-    :param font_face: Font face to user for the verify code, default
-        'Arial.ttf'.
-    :param text_length: Length of characters for the verify code, default 4.
+    :param charset: Character collection in which verify code symbols choose
+        from, default `CHARSET`.
+    :param width: Width of the verify code picture, in pixels, default 120.
+    :param height: Height of the verify code picture, in pixels, default 30.
+    :param mode: Colour mode of the verify code picture, default 'RGB'.
+    :param bg_color: A 3-elements tuple, containing (R, G, B) three integers
+        which describes the background colour of the verify code picture.
+    :param font_size: Font size of the verify code, default 22.
+    :param font_face: Font face of the verify code, default 'Arial.ttf'.
+    :param text_length: Length of characters which compose the verify code,
+        default 4.
     :param noise_coverage: Probability of noise points, default 0.3.
     :param redis_dsn: Redis DSN(data source name), e.g.
         redis://[:password]@localhost:6379/0.
-    :param ttl: Redis storage expiration time, count on seconds.
-    :param max_try: Trails limit for verify code, default 3.
+    :param ttl: Redis sotrage expiration time, count on seconds.
+    :param max_try: Trials limit for verify code, if try counts exceeded, the
+        current verify code would be expired, default 3.
+    :param redis_factory: Factory function to create redis client.
     """
 
     def __init__(
@@ -102,8 +98,10 @@ class VerifyCodeManager(object):
             noise_coverage=0.3,
             redis_dsn=REDIS_DSN,
             ttl=TOKEN_EXPIRATION,
-            max_try=MAX_TRY):
-        self._r = Redis.from_url(redis_dsn)
+            max_try=MAX_TRY,
+            redis_factory=None):
+        self._r = redis_factory(redis_dsn) if redis_factory else \
+            Redis.from_url(redis_dsn)
         self._ttl = ttl
         self._charset = charset
         self._width = width
@@ -134,6 +132,7 @@ class VerifyCodeManager(object):
         verify_code = self.drawtext(drawer)
         self.noisy(drawer)
         self.blur(canvas)
+        self.line(drawer, canvas)
         buf = StringIO.StringIO()
         canvas.save(buf, fmt, quality=quality)
         return buf, verify_code
@@ -153,7 +152,7 @@ class VerifyCodeManager(object):
             pipe.expire(image_hash, self._ttl)
             if self.is_pipe_success(pipe.execute()):
                 return image_hash
-            raise VerifyCodeError(2102)
+            raise VerifyCodeError(u'Fail to create verify code')
 
     def verify_code_create(self, fmt='JPEG', quality=70):
         """
@@ -173,6 +172,7 @@ class VerifyCodeManager(object):
         verify_code = self.drawtext(drawer)
         self.noisy(drawer)
         self.blur(canvas)
+        self.line(drawer, canvas)
 
         image_buf = StringIO.StringIO()
         canvas.save(image_buf, fmt, quality=quality)
@@ -183,7 +183,7 @@ class VerifyCodeManager(object):
             pipe.expire(image_hash, self._ttl)
             if self.is_pipe_success(pipe.execute()):
                 return image_buf, image_hash
-            raise VerifyCodeError(2102)
+            raise VerifyCodeError(u'Fail to create verify code')
 
     def verify_code_validate(self, image_hash, verify_code):
         """
@@ -196,11 +196,11 @@ class VerifyCodeManager(object):
         try_count = self._r.hincrby(image_hash, 'try_count', 1)
         if try_count > self._max_try:
             self._r.expire(image_hash, 0)
-            raise VerifyCodeError(2013)
+            raise VerifyCodeError(u'Retry times exceeded')
         ref_code = self._r.hget(image_hash, 'verify_code')
         if not ref_code or \
                 verify_code.upper() != ref_code.upper():
-            raise VerifyCodeError(2101)
+            raise VerifyCodeError(u'Incorrect verify code')
         self._r.expire(image_hash, 0)
 
     def randchars(self):
@@ -262,6 +262,30 @@ class VerifyCodeManager(object):
                     fill=self.randcolor(64, 255)
                 )
 
+    def line(self, drawer, canvas):
+        """
+        Draw line above text, add more confusing elements.
+
+        :param drawer: An :py:class:`~PIL.ImageDraw` object.
+        :param canvas: An :py:class:`~PIL.Image.Image` object.
+        """
+        start_width = random.randint(
+            self._width / 8, self._width / 4)
+        start_height = random.randint(
+            self._height / 4, self._height * 3 / 4)
+        stop_width = random.randint(
+            self._width * 3 / 4, self._width * 7 / 8)
+        stop_height = random.randint(
+            self._height / 4, self._height * 3 / 4)
+        drawer.line(
+            (start_width,
+             start_height,
+             stop_width,
+             stop_height),
+            fill=random.randint(128, 155),
+            width=3
+        )
+
     def blur(self, canvas):
         """
         Blur the picture.
@@ -278,6 +302,10 @@ class VerifyCodeManager(object):
         Returns True if each pipeline command executed successfully,
             else False.
         """
-        return reduce(lambda x, y: bool(x) & bool(y), pipe_res)
+        return reduce(
+            lambda x, y: bool(x) & bool(y),
+            pipe_res)
 
-verifycode_manager = VerifyCodeManager()
+
+def default_manager():
+    return VerifyCodeManager()

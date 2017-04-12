@@ -5,9 +5,22 @@ help:
 	@echo '    make install    install as a package '
 
 requirements:
-	pip install -i http://pypi.douban.com/simple -r requirements.txt --trusted-host pypi.douban.com
+	pip install -r requirements.txt
+
+requirements-dev:
+	pip install -r requirements-dev.txt
 
 install: requirements
+	python setup.py install --record install.record
+	@echo
+	@echo "Install finished"
+
+test: requirements-dev
+	python setup.py install --record install.record
+	@echo
+	@echo "Install finished"
+
+dev: requirements-dev
 	python setup.py install --record install.record
 	@echo
 	@echo "Install finished"

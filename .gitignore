@@ -61,4 +61,4 @@ target/
 .tags
 .idea
 *.swp
-ark_config.py
+.ropeproject/
